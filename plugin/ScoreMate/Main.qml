@@ -31,6 +31,8 @@ ExtensionBlank {
     // 最近一次分析生成的改编指令（供"执行以上建议"按钮使用）
     property var lastInstructions: []
     property var lastCollected: null
+    // 最近一次写回操作的反馈（summary + diffs），供 applySuggestions 汇总
+    property var lastFeedback: ({ summary: "", diffs: [] })
 
     // 初始窗口尺寸（MuseScore form 窗口不可自由拉伸，故内容需自适应+可滚动，
     // 避免按钮行溢出、窗口过小时内容被裁切——见 musescore/MuseScore#26194）
@@ -324,37 +326,42 @@ ExtensionBlank {
             var lines = ["===== 执行改编建议 =====", ""]
             var executed = 0
             var skipped = []
+            var feedbacks = []
 
             for (var i in ins) {
                 var it = ins[i]
                 var rules = (it.params && it.params.rules) || []
+                var fb = null
                 if (it.type === "transpose" && it.params && it.params.semitones !== undefined) {
                     // 转调：内建 transpose 优先（自动修正音名拼写）
                     root.applyTranspose(it.params.semitones)
-                    lines.push("✓ [" + it.id + "] " + it.description)
+                    fb = root.lastFeedback
                     executed++
                 } else if (rules.indexOf("compress_range") >= 0) {
                     // 压缩音域（整句移动）
                     root.compressRange()
-                    lines.push("✓ [" + it.id + "] " + it.description)
+                    fb = root.lastFeedback
                     executed++
                 } else if (rules.indexOf("reduce_density") >= 0) {
                     // 去重复八度（降密度）
                     root.reduceDensity()
-                    lines.push("✓ [" + it.id + "] " + it.description)
+                    fb = root.lastFeedback
                     executed++
                 } else if (rules.indexOf("split_chords") >= 0) {
                     // 拆和弦（转位压缩）
                     root.splitChords()
-                    lines.push("✓ [" + it.id + "] " + it.description)
+                    fb = root.lastFeedback
                     executed++
                 } else if (rules.indexOf("drop_ornaments") >= 0) {
                     // 删装饰音
                     root.dropOrnaments()
-                    lines.push("✓ [" + it.id + "] " + it.description)
+                    fb = root.lastFeedback
                     executed++
                 } else {
                     skipped.push("  ✗ [" + it.id + "] " + it.description + "（v0.2 支持写回）")
+                }
+                if (fb && fb.summary) {
+                    feedbacks.push({ id: it.id, summary: fb.summary, diffs: fb.diffs })
                 }
             }
 
@@ -362,7 +369,23 @@ ExtensionBlank {
             if (executed > 0) {
                 lines.push("已应用 " + executed + " 条指令，均可 Ctrl+Z 撤销。")
             }
+            // 每条指令的执行结果与改动明细
+            for (var f in feedbacks) {
+                var fb2 = feedbacks[f]
+                lines.push("")
+                lines.push("[" + fb2.id + "] " + fb2.summary)
+                if (fb2.diffs && fb2.diffs.length > 0) {
+                    var shownD = fb2.diffs.slice(0, 6)
+                    for (var d in shownD) {
+                        lines.push("    " + shownD[d])
+                    }
+                    if (fb2.diffs.length > shownD.length) {
+                        lines.push("    …共 " + fb2.diffs.length + " 处")
+                    }
+                }
+            }
             if (skipped.length > 0) {
+                lines.push("")
                 lines.push("以下指令暂不支持写回：")
                 for (var k in skipped) {
                     lines.push(skipped[k])
@@ -372,6 +395,58 @@ ExtensionBlank {
         } catch (e) {
             report.text = "执行建议出错：" + e
         }
+    }
+
+    // MIDI 音高 → 音名（60=C4，黑键取升号拼写）
+    function pitchName(p) {
+        var names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        var pc = ((p % 12) + 12) % 12
+        var oct = Math.floor(p / 12) - 1
+        return names[pc] + oct
+    }
+
+    // 音符显示名：优先 MuseScore 的 noteName（拼写更准），否则自行转换
+    function noteDisplay(el) {
+        if (!el) { return "?" }
+        try {
+            if (el.noteName !== undefined && el.noteName !== null) {
+                return String(el.noteName)
+            }
+        } catch (e) {}
+        if (el.pitch !== undefined) {
+            return root.pitchName(el.pitch)
+        }
+        return "?"
+    }
+
+    // 统一结果反馈：高亮选中被修改的音符 + 报告改动明细
+    function finishEdit(modified, diffLines, summary) {
+        // ① 高亮：选中被修改的音符，让用户在乐谱上直接看到改动位置
+        var score = currentScore()
+        if (score && score.selection && typeof score.selection.select === "function") {
+            try {
+                for (var i in modified) {
+                    score.selection.select(modified[i], i > 0)
+                }
+            } catch (e) {}
+        }
+        // ② 报告：摘要 + 明细
+        var lines = [summary, ""]
+        if (diffLines.length > 0) {
+            lines.push("改动明细：")
+            var shown = diffLines.slice(0, 10)
+            for (var k in shown) {
+                lines.push("  " + shown[k])
+            }
+            if (diffLines.length > shown.length) {
+                lines.push("  …共 " + diffLines.length + " 处改动")
+            }
+        }
+        lines.push("")
+        lines.push("提示：改动音符已高亮选中；可用 Ctrl+Z 撤销。")
+        report.text = lines.join("\n")
+        // 缓存反馈供 applySuggestions 汇总
+        root.lastFeedback = { summary: summary, diffs: diffLines }
     }
 
     // 移调写回：优先用 MuseScore 内建 transpose（自动修正 tpc 音名拼写），
@@ -394,8 +469,10 @@ ExtensionBlank {
                     if (score.startCmd) { score.startCmd() }
                     score.transpose(0, direction, 0, diatonic, absN, true, true)
                     if (score.endCmd) { score.endCmd() }
-                    report.text = "移调完成（内建 transpose，音名拼写已自动修正）：" +
-                                  (n > 0 ? "+" : "") + n + " 半音\n可用 Ctrl+Z 撤销。"
+                    // 内建模式下无法逐音对比，重新收集选中区作为"已改动"反馈
+                    var after = collectElements()
+                    root.finishEdit(after.elements, [],
+                        "移调完成（内建 transpose）：" + (n > 0 ? "+" : "") + n + " 半音")
                     return
                 } catch (e) {
                     // 内建失败（如选区为空）→ 回退路径 B
@@ -409,27 +486,32 @@ ExtensionBlank {
                 return
             }
             var outOfRange = 0
+            var modified = []
+            var diffs = []
             if (score.startCmd) {
                 score.startCmd()
             }
             for (var i in collected.elements) {
-                var p = collected.elements[i].pitch + n
+                var el = collected.elements[i]
+                var oldP = el.pitch
+                var p = oldP + n
                 if (p < 0 || p > 127) {
                     outOfRange++
                     continue
                 }
-                collected.elements[i].pitch = p
+                el.pitch = p
+                modified.push(el)
+                diffs.push(root.noteDisplay(el) + " ← " + root.pitchName(oldP))
             }
             if (score.endCmd) {
                 score.endCmd()
             }
-            var msg = "移调完成（手动模式）：" + (n > 0 ? "+" : "") + n + " 半音，共处理 " +
-                      collected.elements.length + " 个音符"
+            var msg = "移调完成（手动模式）：" + (n > 0 ? "+" : "") + n + " 半音，共 " +
+                      modified.length + " 个音符"
             if (outOfRange > 0) {
                 msg += "（跳过 " + outOfRange + " 个越界音符）"
             }
-            msg += "\n可用 Ctrl+Z 撤销。"
-            report.text = msg
+            root.finishEdit(modified, diffs, msg)
         } catch (e) {
             report.text = "移调出错：" + e
         }
@@ -478,6 +560,8 @@ ExtensionBlank {
             }
 
             var moved = 0
+            var modified = []
+            var diffs = []
             if (shift !== 0) {
                 if (score && score.startCmd) {
                     score.startCmd()
@@ -487,15 +571,18 @@ ExtensionBlank {
                     if (el.pitch === undefined) { continue }
                     var np = el.pitch + shift
                     if (np < 0 || np > 127) { continue }
+                    var oldP = el.pitch
                     el.pitch = np
                     moved++
+                    modified.push(el)
+                    diffs.push(root.pitchName(oldP) + " → " + root.pitchName(np))
                 }
                 if (score && score.endCmd) {
                     score.endCmd()
                 }
                 var dirWord = shift < 0 ? "下移" : "上移"
-                report.text = "压缩音域完成：整句" + dirWord + " " + Math.abs(shift) +
-                              " 个半音，共移动 " + moved + " 个音符（旋律轮廓保持不变）\n可用 Ctrl+Z 撤销。"
+                root.finishEdit(modified, diffs,
+                    "压缩音域完成：整句" + dirWord + " " + Math.abs(shift) + " 个半音，共移动 " + moved + " 个音符（旋律轮廓保持不变）")
             } else {
                 report.text = "压缩音域：整句移动无法解决（越界方向冲突），请缩小选区后重试。"
             }
@@ -519,10 +606,14 @@ ExtensionBlank {
             }
             var removed = 0
             var failed = 0
+            var diffs = []
             if (score.startCmd) { score.startCmd() }
             for (var i in collected.ornamentElements) {
-                if (root.tryRemove(score, collected.ornamentElements[i])) {
+                var el = collected.ornamentElements[i]
+                var desc = root.noteDisplay(el)
+                if (root.tryRemove(score, el)) {
                     removed++
+                    diffs.push("删除 " + desc)
                 } else {
                     failed++
                 }
@@ -530,8 +621,10 @@ ExtensionBlank {
             if (score.endCmd) { score.endCmd() }
             var msg = "删装饰音完成：移除 " + removed + " 个装饰音"
             if (failed > 0) { msg += "（" + failed + " 个删除失败）" }
-            msg += "\n可用 Ctrl+Z 撤销。"
-            report.text = msg
+            // 已删除的音符无法高亮，仅给出明细
+            report.text = msg + "\n\n改动明细：\n" + diffs.join("\n") +
+                          "\n\n可用 Ctrl+Z 撤销。"
+            root.lastFeedback = { summary: msg, diffs: diffs }
         } catch (e) {
             report.text = "删装饰音出错：" + e
         }
@@ -548,6 +641,8 @@ ExtensionBlank {
                 return
             }
             var changed = 0
+            var modified = []
+            var diffs = []
             if (score.startCmd) { score.startCmd() }
 
             // 按和弦分组：优先 chordElements（元素自身带 .notes），
@@ -598,8 +693,11 @@ ExtensionBlank {
                     }
                     if (candidate < loPitch) { break }
                     if (chordNotes[hiIdx].pitch !== candidate) {
+                        var oldP = chordNotes[hiIdx].pitch
                         chordNotes[hiIdx].pitch = candidate
                         changed++
+                        modified.push(chordNotes[hiIdx])
+                        diffs.push(root.pitchName(oldP) + " → " + root.pitchName(candidate) + "（转位）")
                     }
                     span = root.chordSpan(chordNotes)
                 }
@@ -609,7 +707,8 @@ ExtensionBlank {
             if (changed === 0) {
                 report.text = "未发现跨度超过 10 度的和弦，无需拆分。"
             } else {
-                report.text = "拆和弦完成：转位 " + changed + " 个音符（高音降八度，跨度收敛）\n可用 Ctrl+Z 撤销。"
+                root.finishEdit(modified, diffs,
+                    "拆和弦完成：转位 " + changed + " 个音符（高音降八度，跨度收敛）")
             }
         } catch (e) {
             report.text = "拆和弦出错：" + e
@@ -713,6 +812,7 @@ ExtensionBlank {
             var removed = 0
             var failed = 0
             var chordsUsed = 0
+            var diffs = []
             if (score && score.startCmd) {
                 score.startCmd()
             }
@@ -729,6 +829,7 @@ ExtensionBlank {
                         }
                     }
                     for (var c in toRemoveA) {
+                        diffs.push("删除重复 " + root.noteDisplay(toRemoveA[c]))
                         if (root.tryRemove(score, toRemoveA[c])) { removed++ } else { failed++ }
                     }
                 }
@@ -742,6 +843,7 @@ ExtensionBlank {
                     if (chordNotes === undefined || chordNotes.length < 2) { continue }
                     chordsUsed++
                     if (root.isOctaveDuplicate(n, chordNotes)) {
+                        diffs.push("删除重复 " + root.noteDisplay(n))
                         if (root.tryRemove(score, n)) { removed++ } else { failed++ }
                     }
                 }
@@ -760,6 +862,7 @@ ExtensionBlank {
                 msg = "识别到 " + chordsUsed + " 个和弦"
                 if (removed === 0 && failed === 0) {
                     msg += "；未发现重复八度（每个和弦内同音名只保留最低音）。"
+                    root.lastFeedback = { summary: msg, diffs: [] }
                 } else {
                     msg += "；移除 " + removed + " 个音符"
                     if (failed > 0) {
@@ -768,7 +871,8 @@ ExtensionBlank {
                                (typeof curScore) + " selection.select=" +
                                (score && score.selection ? typeof score.selection.select : "无")
                     }
-                    msg += "\n可用 Ctrl+Z 撤销。"
+                    msg += "\n\n改动明细：\n" + diffs.join("\n") + "\n\n可用 Ctrl+Z 撤销。"
+                    root.lastFeedback = { summary: msg, diffs: diffs }
                 }
             }
             report.text = msg
