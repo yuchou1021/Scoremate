@@ -1,5 +1,5 @@
 /*
- * 谱伴 ScoreMate —— MuseScore 4.7 新扩展（form）v0.4.6
+ * 谱伴 ScoreMate —— MuseScore 4.7 新扩展（form）v0.4.7
  *
  * 里程碑 2 功能：
  *   1. 分析升级：两段式（/api/analyze 提取特征 → /api/arrange 生成指令）
@@ -7,6 +7,10 @@
  *
  * v0.4.6 UI 修复：内容自适应 + 可滚动（按钮行 Flow 换行、Flickable 滚动），
  *   解决窗口尺寸变化时按钮溢出/内容被裁切的问题。
+ * v0.4.7 写回增强：
+ *   - 「执行以上建议」：把分析生成的指令映射到写回操作（移调/压缩音域/
+ *     去重复八度），未支持的规则明确提示 v0.2
+ *   - 压缩音域改为「整句移动」：整段上移/下移保持旋律轮廓，不再逐音折叠
  *
  * 网络：同步 XMLHttpRequest → HTTP（4.7 实测可用；同步不依赖异步回调）
  * 乐谱：api.engraving.curScore（新 API），写操作包在 startCmd/endCmd 里
@@ -23,6 +27,10 @@ import MuseApi.Controls
 
 ExtensionBlank {
     id: root
+
+    // 最近一次分析生成的改编指令（供"执行以上建议"按钮使用）
+    property var lastInstructions: []
+    property var lastCollected: null
 
     // 初始窗口尺寸（MuseScore form 窗口不可自由拉伸，故内容需自适应+可滚动，
     // 避免按钮行溢出、窗口过小时内容被裁切——见 musescore/MuseScore#26194）
@@ -49,9 +57,17 @@ ExtensionBlank {
             }
 
             StyledTextLabel { text: "① 分析（生成改编建议）：" }
-            FlatButton {
-                text: "分析选区并生成改编指令"
-                onClicked: root.runAnalysis()
+            Flow {
+                width: parent.width
+                spacing: 6
+                FlatButton {
+                    text: "分析选区并生成改编指令"
+                    onClicked: root.runAnalysis()
+                }
+                FlatButton {
+                    text: "执行以上建议"
+                    onClicked: root.applySuggestions()
+                }
             }
 
             StyledTextLabel { text: "② 移调写回（直接改谱，Ctrl+Z 可撤销）：" }
@@ -226,7 +242,8 @@ ExtensionBlank {
             lines.push("  ⚠ " + warns[j])
         }
         lines.push("")
-        lines.push("提示：指令执行（写回乐谱）正在开发；移调可以先用下方按钮直接改。")
+        lines.push("提示：点「执行以上建议」可应用已支持的指令（移调/压缩音域/去重复八度）；")
+        lines.push("删装饰音/拆和弦/简化节奏的写回将在 v0.2 支持。")
         return lines.join("\n")
     }
 
@@ -274,9 +291,71 @@ ExtensionBlank {
                 report.text = "改编请求失败（状态码 " + x2.status + "）\n" + x2.responseText
                 return
             }
+            var parsed = JSON.parse(x2.responseText)
+            root.lastInstructions = parsed.instructions || []
+            root.lastCollected = collected
             report.text = formatResponse(x2.responseText)
         } catch (e) {
             report.text = "出错：" + e
+        }
+    }
+
+    // 执行最近一次分析生成的改编指令（写回乐谱，可撤销）。
+    // 已支持：转调 / 压缩音域 / 去重复八度；其余规则（删装饰音/拆和弦/
+    // 简化节奏）写回在 v0.2 接入，这里明确提示而不是静默跳过。
+    function applySuggestions() {
+        try {
+            var ins = root.lastInstructions
+            if (!ins || ins.length === 0) {
+                report.text = "没有可执行的建议。\n请先点「分析选区并生成改编指令」。"
+                return
+            }
+            var collected = collectElements()
+            if (collected.elements.length === 0) {
+                report.text = "没有找到音符。\n请先在乐谱中选中一段音符，再执行建议。"
+                return
+            }
+
+            var lines = ["===== 执行改编建议 =====", ""]
+            var executed = 0
+            var skipped = []
+
+            for (var i in ins) {
+                var it = ins[i]
+                var rules = (it.params && it.params.rules) || []
+                if (it.type === "transpose" && it.params && it.params.semitones !== undefined) {
+                    // 转调：直接改选中音符 pitch
+                    root.applyTranspose(it.params.semitones)
+                    lines.push("✓ [" + it.id + "] " + it.description)
+                    executed++
+                } else if (rules.indexOf("compress_range") >= 0) {
+                    // 压缩音域（整句移动）
+                    root.compressRange()
+                    lines.push("✓ [" + it.id + "] " + it.description)
+                    executed++
+                } else if (rules.indexOf("reduce_density") >= 0) {
+                    // 去重复八度（降密度）
+                    root.reduceDensity()
+                    lines.push("✓ [" + it.id + "] " + it.description)
+                    executed++
+                } else {
+                    skipped.push("  ✗ [" + it.id + "] " + it.description + "（v0.2 支持写回）")
+                }
+            }
+
+            lines.push("")
+            if (executed > 0) {
+                lines.push("已应用 " + executed + " 条指令，均可 Ctrl+Z 撤销。")
+            }
+            if (skipped.length > 0) {
+                lines.push("以下指令暂不支持写回：")
+                for (var k in skipped) {
+                    lines.push(skipped[k])
+                }
+            }
+            report.text = lines.join("\n")
+        } catch (e) {
+            report.text = "执行建议出错：" + e
         }
     }
 
@@ -316,39 +395,69 @@ ExtensionBlank {
         }
     }
 
-    // 压缩音域：超出 C2-C6 的音符按八度平移拉回（音名不变）
+    // 压缩音域 v2（整句移动）：统计整体越界方向，整段上移/下移一个八度，
+    // 保持旋律轮廓不变；不再逐音折叠（逐音折叠会破坏旋律线——用户反馈）。
+    // 跨度极大（同时超高低界且超 5 个八度）时提示缩小选区，不强行压缩。
     function compressRange() {
         try {
             var collected = collectElements()
             var score = currentScore()
-            if (collected.elements.length === 0) {
+            if (!score || collected.elements.length === 0) {
                 report.text = "没有找到音符。\n请先选中一段音符。"
                 return
             }
             var LOW = 36   // C2
             var HIGH = 84  // C6
-            var moved = 0
-            if (score && score.startCmd) {
-                score.startCmd()
+            var maxP = 0
+            var minP = 127
+            for (var i in collected.notes) {
+                var p = collected.notes[i]
+                if (p > maxP) { maxP = p }
+                if (p < minP) { minP = p }
             }
-            for (var i in collected.elements) {
-                var el = collected.elements[i]
-                var p = el.pitch
-                var np = p
-                while (np < LOW) { np += 12 }
-                while (np > HIGH) { np -= 12 }
-                if (np !== p) {
+            var above = maxP > HIGH
+            var below = minP < LOW
+            if (!above && !below) {
+                report.text = "没有超出 C2-C6 范围的音符，无需压缩。"
+                return
+            }
+            // 跨度极大：整句移动无法同时解决高低两侧越界，提示用户而非硬压
+            if (above && below && (maxP - minP) > 60) {
+                report.text = "选区跨度超过 5 个八度（最低 " + minP + "，最高 " + maxP + "），\n" +
+                              "整句移动无法同时解决高低越界。\n请缩小选区后再试，或手动处理极端音符。"
+                return
+            }
+
+            var shift = 0
+            if (above) {
+                // 整体偏高：整句下移，直到最高音不越界（上限 2 个八度）
+                while (maxP + shift > HIGH && shift > -24) { shift -= 12 }
+            } else {
+                // 整体偏低：整句上移，直到最低音不越界（上限 2 个八度）
+                while (minP + shift < LOW && shift < 24) { shift += 12 }
+            }
+
+            var moved = 0
+            if (shift !== 0) {
+                if (score && score.startCmd) {
+                    score.startCmd()
+                }
+                for (var j in collected.elements) {
+                    var el = collected.elements[j]
+                    if (el.pitch === undefined) { continue }
+                    var np = el.pitch + shift
+                    if (np < 0 || np > 127) { continue }
                     el.pitch = np
                     moved++
                 }
-            }
-            if (score && score.endCmd) {
-                score.endCmd()
-            }
-            if (moved === 0) {
-                report.text = "没有超出 C2-C6 范围的音符，无需压缩。"
+                if (score && score.endCmd) {
+                    score.endCmd()
+                }
+                var dirWord = shift < 0 ? "下移" : "上移"
+                report.text = "压缩音域完成：整句" + dirWord + " " + Math.abs(shift) +
+                              " 个半音，共移动 " + moved + " 个音符（旋律轮廓保持不变）\n可用 Ctrl+Z 撤销。"
             } else {
-                report.text = "压缩音域完成：调整 " + moved + " 个音符（八度平移，音名不变）\n可用 Ctrl+Z 撤销。"
+                report.text = "压缩音域：整句移动无法解决（越界方向冲突），请缩小选区后重试。"
             }
         } catch (e) {
             report.text = "压缩音域出错：" + e
