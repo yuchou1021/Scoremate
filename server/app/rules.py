@@ -42,12 +42,21 @@ def transpose_plan(
             return [], ["无法确定起始/目标调：请先对选区做 /api/analyze，或在插件设置里手动指定调性"]
         semitones = (dst - src) % 12
 
-    semitones = int(semitones) % 12
+    semitones = int(semitones)
+    if semitones == 0:
+        return [], ["目标调与当前调相同（半音数为 0），无操作"]
+    # 规范化到单个八度内并保留方向（±12 即同音级，已在上面拦截；
+    # 超过 ±11 按等价方向折叠，如 13 → +1、-13 → -1）
+    if semitones > 11:
+        semitones = semitones % 12
+    elif semitones < -11:
+        semitones = -((-semitones) % 12)
     if semitones == 0:
         return [], ["目标调与当前调相同（半音数为 0），无操作"]
 
     scope = _scope(summary)
-    desc = f"将选区移调 {semitones} 个半音"
+    dir_word = "降" if semitones < 0 else "升"
+    desc = f"将选区{dir_word}调 {abs(semitones)} 个半音"
     why = f"原调 {summary.key_estimate or '未知'}"
     if target_key:
         desc += f"，目标调 {target_key}"
@@ -128,6 +137,6 @@ def validate(instructions: list[EditInstruction], measures: int) -> list[str]:
             warnings.append(f"{it.id}: 范围超出总小节数（{measures}）")
         if it.type == "transpose":
             st = it.params.get("semitones")
-            if st is not None and not (0 < st < 12):
-                warnings.append(f"{it.id}: 半音数异常（{st}，应为 1-11）")
+            if st is not None and not (-11 <= st <= 11 and st != 0):
+                warnings.append(f"{it.id}: 半音数异常（{st}，应为 -11 到 11 且非 0）")
     return warnings

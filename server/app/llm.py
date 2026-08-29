@@ -16,6 +16,14 @@ from __future__ import annotations
 from .schemas import ArrangeRequest, EditInstruction
 
 
+def is_configured() -> bool:
+    """LLM 层是否已配置可用（v0.1 恒 False；v0.2 接入真实状态）。
+
+    由 /api/config 的 llm_configured 字段引用，避免端点内硬编码。
+    """
+    return False
+
+
 def decide(request: ArrangeRequest) -> tuple[list[EditInstruction], list[str]] | None:
     """根据请求生成改编决策。
 

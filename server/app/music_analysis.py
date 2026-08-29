@@ -63,11 +63,16 @@ def compute_range(notes: list[int]) -> dict:
 
 
 def difficulty_score(
-    notes: list[int], measures: int, features: DifficultyFeatures | None = None
+    notes: list[int],
+    measures: int,
+    features: DifficultyFeatures | None = None,
+    ornament_count: int = 0,
+    rhythm_complexity: float = 0.0,
 ) -> tuple[float, DifficultyFeatures]:
     """难度评分 0-1（PRD §8 加权公式）。
 
     无特征数据时从 notes 推导：密度按每小节 64 音为满密度归一。
+    装饰音/节奏复杂度无法从扁平音高列表推导，由调用方传入（插件端实测值）。
     """
     if features is None:
         span = compute_range(notes)["span"]
@@ -75,6 +80,8 @@ def difficulty_score(
         features = DifficultyFeatures(
             note_density=min(1.0, density),
             range_span=span,
+            ornament_count=max(0, int(ornament_count)),
+            rhythm_complexity=max(0.0, min(1.0, float(rhythm_complexity))),
         )
 
     weights = {
@@ -100,11 +107,24 @@ def difficulty_score(
     return round(score, 3), features
 
 
-def analyze(notes: list[int], measures: int = 1) -> AnalyzeResponse:
-    """综合分析入口：调性 + 音域 + 难度。"""
+def analyze(
+    notes: list[int],
+    measures: int = 1,
+    ornament_count: int = 0,
+    rhythm_complexity: float = 0.0,
+) -> AnalyzeResponse:
+    """综合分析入口：调性 + 音域 + 难度。
+
+    ornament_count / rhythm_complexity 由插件端从乐谱实测传入
+    （扁平音高列表推导不出），缺省为 0。
+    """
     key, conf = detect_key(notes)
     rng = compute_range(notes)
-    diff, features = difficulty_score(notes, measures)
+    diff, features = difficulty_score(
+        notes, measures,
+        ornament_count=ornament_count,
+        rhythm_complexity=rhythm_complexity,
+    )
     return AnalyzeResponse(
         key_estimate=key,
         key_confidence=conf,

@@ -12,8 +12,10 @@ OUT = Path(__file__).resolve().parent
 
 
 def make_note(spec, divisions=4):
-    """spec: dict(step, octave, dur, type, alter=0, chord=False, rest=False)"""
+    """spec: dict(step, octave, dur, type, alter=0, chord=False, rest=False, grace=False)"""
     n = ET.Element("note")
+    if spec.get("grace"):
+        ET.SubElement(n, "grace")
     if spec.get("chord"):
         ET.SubElement(n, "chord")
     if spec.get("rest"):
@@ -30,7 +32,7 @@ def make_note(spec, divisions=4):
     return n
 
 
-def build(measures, fifths=0, title="Test"):
+def build(measures, fifths=0, title="Test", divisions=4):
     """measures: list of list of note-spec dicts；4/4 拍，单声部。"""
     root = ET.Element("score-partwise", {"version": "4.0"})
     pl = ET.SubElement(root, "part-list")
@@ -41,7 +43,7 @@ def build(measures, fifths=0, title="Test"):
     for i, m in enumerate(measures, 1):
         me = ET.SubElement(part, "measure", {"number": str(i)})
         attrs = ET.SubElement(me, "attributes")
-        ET.SubElement(attrs, "divisions").text = "4"
+        ET.SubElement(attrs, "divisions").text = str(divisions)
         key = ET.SubElement(attrs, "key")
         ET.SubElement(key, "fifths").text = str(fifths)
         ET.SubElement(key, "mode").text = "major"
@@ -52,7 +54,7 @@ def build(measures, fifths=0, title="Test"):
         ET.SubElement(clef, "sign").text = "G"
         ET.SubElement(clef, "line").text = "2"
         for spec in m:
-            me.append(make_note(spec))
+            me.append(make_note(spec, divisions))
     return ET.tostring(root, encoding="unicode")
 
 
@@ -62,6 +64,14 @@ def q(step, octave, alter=0):      # 四分音符
 
 def s16(step, octave):             # 十六分音符
     return {"step": step, "octave": octave, "dur": 1, "type": "16th"}
+
+
+def s32(step, octave):             # 三十二分音符（配合 divisions=8）
+    return {"step": step, "octave": octave, "dur": 1, "type": "32nd"}
+
+
+def grace(step, octave):           # 倚音（装饰音，不占时值）
+    return {"step": step, "octave": octave, "dur": 0, "type": "eighth", "grace": True}
 
 
 def whole(step, octave, chord=False):   # 全音符
@@ -130,6 +140,19 @@ def main():
         [half("F", 2), half("A", 4, chord=True), half("F", 2), half("C", 5, chord=True)],
         [half("C", 2), half("G", 4, chord=True), half("C", 2), half("E", 4, chord=True)],
     ], title="Wide Stretch Chords"))
+
+    # 7) 装饰音旋律（倚音，测试装饰音检测 → 删除装饰音）
+    g = [grace("D", 5), q("C", 4), grace("E", 5), q("D", 4),
+         grace("F", 5), q("E", 4), grace("G", 5), q("F", 4)]
+    write("07_ornaments.musicxml", build([g, g, g, g], title="Ornaments"))
+
+    # 8) 复杂节奏（32 分音符跑动，测试节奏复杂度 → 简化节奏）
+    run32 = [s32("C", 4), s32("D", 4), s32("E", 4), s32("F", 4),
+             s32("G", 4), s32("A", 4), s32("B", 4), s32("C", 5),
+             s32("D", 5), s32("C", 5), s32("B", 4), s32("A", 4),
+             s32("G", 4), s32("F", 4), s32("E", 4), s32("D", 4)]
+    write("08_complex_rhythm.musicxml", build([run32, run32, run32, run32],
+          divisions=8, title="Complex Rhythm"))
 
 
 if __name__ == "__main__":

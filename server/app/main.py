@@ -3,13 +3,14 @@
 启动：uvicorn app.main:app --reload --port 8000
 
 通道：
-- HTTP  /api/*   —— 调试、外部工具、浏览器
-- WS    /ws      —— 插件端主通道（MuseScore 4.4+ 的 api.websocket
-                     已由官方 dev_test_websocket 插件证实可用；
-                     XMLHttpRequest 在插件 QML 中未经官方确认，故不用）
+- HTTP  /api/*   —— 插件端主通道（4.7 form 扩展中同步 XMLHttpRequest
+                     实测可用；插件 Main.qml 即走此通道）
+- WS    /ws、/   —— 备用/测试通道（MuseScore 插件 api.websocket 的
+                     异步回调在 4.7 不执行，插件端未使用）
 """
 
 import json
+import re
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,8 +49,15 @@ def handle_arrange(req: ArrangeRequest) -> ArrangeResponse:
     - 两者都提到 → 都做
     """
     explicit = req.instruction.strip()
-    mentions_transpose = any(k in explicit for k in ("转调", "移调", "transpose", "key"))
-    mentions_simplify = any(k in explicit for k in ("简化", "简单", "simplify", "难度"))
+    # 英文用词边界匹配，避免 "keyboard"/"monkey" 等误触发转调
+    mentions_transpose = bool(
+        any(k in explicit for k in ("转调", "移调"))
+        or re.search(r"\b(transpose|key)\b", explicit, re.IGNORECASE)
+    )
+    mentions_simplify = bool(
+        any(k in explicit for k in ("简化", "简单", "难度"))
+        or re.search(r"\bsimplif(y|ication|ied)?\b", explicit, re.IGNORECASE)
+    )
 
     do_transpose = bool(req.target_key or req.semitones is not None or mentions_transpose)
     do_simplify = bool(mentions_simplify or (not explicit and not do_transpose))
@@ -98,16 +106,24 @@ def config() -> dict:
         "capabilities": ["analyze", "transpose", "simplify"],
         "analysis": ["key", "range", "difficulty"],
         "levels": ["simple", "medium"],
-        "transport": ["http", "websocket"],
-        "llm_configured": False,  # v0.2 起为真实状态
+        "transport": ["http", "websocket"],  # HTTP 为插件端实际通道；WS 为测试/备用
+        "llm_configured": llm.is_configured(),
         "notes": "v0.1 为纯规则引擎；LLM 创意层（局部重配/加花）在 v0.2 接入",
     }
 
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 def analyze_endpoint(req: AnalyzeRequest) -> AnalyzeResponse:
-    """分析：调性检测 + 音域 + 难度评分。输入 midi 音高列表即可。"""
-    return analyze(req.notes, req.measures)
+    """分析：调性检测 + 音域 + 难度评分。
+
+    输入 midi 音高列表即可；装饰音/节奏复杂度由插件端实测后传入。
+    """
+    return analyze(
+        req.notes,
+        req.measures,
+        ornament_count=req.ornament_count,
+        rhythm_complexity=req.rhythm_complexity,
+    )
 
 
 @app.post("/api/arrange", response_model=ArrangeResponse)
@@ -116,10 +132,11 @@ def arrange_endpoint(req: ArrangeRequest) -> ArrangeResponse:
 
 
 async def _ws_handler(ws: WebSocket) -> None:
-    """插件端 WebSocket 通道（v0.1 协议）。
+    """WebSocket 通道（测试与备用，协议同 HTTP /api/*）。
 
-    MuseScore 插件的 api.websocket.open(port) 连接的是 ws://127.0.0.1:port/（根路径），
-    故在 "/" 暴露插件主通道；"/ws" 为别名，供测试与其他客户端使用。
+    插件端实际走同步 XMLHttpRequest → HTTP；WS 保留给测试与其他客户端。
+    MuseScore 插件 api.websocket.open(port) 连接的是 ws://127.0.0.1:port/
+    （根路径），故在 "/" 暴露；"/ws" 为别名，供测试与其他客户端使用。
 
     请求（JSON 文本）：
       {"type": "arrange", "payload": {ArrangeRequest 字段}}
@@ -144,7 +161,12 @@ async def _ws_handler(ws: WebSocket) -> None:
                     await ws.send_text(json.dumps({"type": "arrange", "result": result}))
                 elif mtype == "analyze":
                     req = AnalyzeRequest.model_validate(payload)
-                    result = analyze(req.notes, req.measures).model_dump()
+                    result = analyze(
+                        req.notes,
+                        req.measures,
+                        ornament_count=req.ornament_count,
+                        rhythm_complexity=req.rhythm_complexity,
+                    ).model_dump()
                     await ws.send_text(json.dumps({"type": "analyze", "result": result}))
                 else:
                     await ws.send_text(json.dumps({"type": "error", "message": f"未知消息类型: {mtype}"}))
@@ -156,7 +178,7 @@ async def _ws_handler(ws: WebSocket) -> None:
 
 @app.websocket("/")
 async def ws_root(ws: WebSocket) -> None:
-    """插件主通道：MuseScore api.websocket.open(port) 连接的路径。"""
+    """根路径别名（MuseScore api.websocket.open(port) 连接的路径）。"""
     await _ws_handler(ws)
 
 

@@ -17,7 +17,6 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r server/requirements.txt
-          pip install httpx2  # starlette TestClient 需要
 
       - name: Core logic tests（调性/音域/难度/转调/简化）
         run: python server/tests/smoke_core.py

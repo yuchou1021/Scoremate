@@ -36,10 +36,16 @@ class ScoreSummary(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    """分析请求：midi 音高列表即足够 v0.1 的调性/音域/难度分析。"""
+    """分析请求：midi 音高列表 + 插件端实测特征。
+
+    notes 足够 v0.1 的调性/音域/密度分析；装饰音与节奏复杂度无法从
+    扁平音高列表推导，由插件端从乐谱对象实测后传入（缺省为 0）。
+    """
 
     notes: list[int] = Field(default_factory=list)
     measures: int = 1
+    ornament_count: int = 0  # 插件端实测：装饰音（倚音/波音/颤音）数量
+    rhythm_complexity: float = 0.0  # 插件端实测：0-1 节奏复杂度（短时值/三连音占比）
 
 
 class AnalyzeResponse(BaseModel):

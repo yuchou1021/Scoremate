@@ -6,7 +6,17 @@
     python tests/smoke_api.py
 """
 
-import httpx
+import sys
+from pathlib import Path
+
+# httpx2 是新版 httpx 的继任者（starlette TestClient 官方同样以 httpx2 优先），
+# 优先使用；老环境回退到 httpx。
+try:
+    import httpx2 as httpx
+except ImportError:  # pragma: no cover - 老环境回退
+    import httpx  # type: ignore[no-redef]
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 BASE = "http://127.0.0.1:8000"
 FAILED = []

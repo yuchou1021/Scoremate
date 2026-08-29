@@ -2,7 +2,9 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2.6
 httpx>=0.27
-# 仅测试需要（新版 starlette TestClient）：pip install httpx2
+# 测试依赖：新版 starlette（1.6+）TestClient 官方使用 httpx2 而非 httpx，
+# 故 CI/本地测试需安装；smoke_api.py 亦以 httpx2 为优先（见其 import）。
+httpx2>=2.0
 # music21 为可选增强（更丰富的和声分析，v0.2 起使用）；
 # v0.1 的调性/音域/难度分析为纯 Python 实现，未安装也能跑。
 music21>=9.1

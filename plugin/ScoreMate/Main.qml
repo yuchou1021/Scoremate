@@ -77,16 +77,18 @@ ExtensionBlank {
         return null
     }
 
-    // 收集选区：音符元素引用、音高列表、和弦跨度、和弦元素
+    // 收集选区：音符元素引用、音高列表、和弦跨度、和弦元素、时值类型、装饰音数
     function collectElements() {
         var score = currentScore()
         if (!score) {
-            return { elements: [], notes: [], chords: [], chordElements: [] }
+            return { elements: [], notes: [], chords: [], chordElements: [], durationTypes: [], ornaments: 0 }
         }
         var elements = []
         var notes = []
         var chords = []
         var chordElements = []
+        var durationTypes = []
+        var ornaments = 0
         var fullScore = !score.selection.elements.length
         if (fullScore) {
             try { cmd("select-all") } catch (e) {}
@@ -96,6 +98,23 @@ ExtensionBlank {
             if (el.pitch !== undefined) {
                 notes.push(el.pitch)
                 elements.push(el)
+                // 时值类型（防御式读取，用于节奏复杂度）
+                try {
+                    if (el.type !== undefined && el.type !== null) {
+                        durationTypes.push(String(el.type))
+                    } else if (el.durationType !== undefined && el.durationType !== null) {
+                        durationTypes.push(String(el.durationType))
+                    }
+                } catch (e) {}
+                // 装饰音标记（倚音/波音/颤音，防御式读取）
+                try {
+                    if (el.grace === true || el.isGrace === true ||
+                        (el.graceIndex !== undefined && el.graceIndex !== null)) {
+                        ornaments++
+                    } else if (el.type !== undefined && String(el.type).indexOf("grace") >= 0) {
+                        ornaments++
+                    }
+                } catch (e) {}
             }
             if (el.notes !== undefined && el.notes.length > 0) {
                 chordElements.push(el)
@@ -112,7 +131,23 @@ ExtensionBlank {
         if (fullScore) {
             try { cmd("escape") } catch (e) {}
         }
-        return { elements: elements, notes: notes, chords: chords, chordElements: chordElements }
+        return { elements: elements, notes: notes, chords: chords, chordElements: chordElements,
+                 durationTypes: durationTypes, ornaments: ornaments }
+    }
+
+    // 节奏复杂度 0-1：短时值（32分/64分）音符占比越高越复杂
+    function computeRhythmComplexity(durationTypes) {
+        if (!durationTypes || durationTypes.length === 0) {
+            return 0
+        }
+        var shortCount = 0
+        for (var i in durationTypes) {
+            var t = durationTypes[i].toLowerCase()
+            if (t.indexOf("32") >= 0 || t.indexOf("64") >= 0 || t.indexOf("128") >= 0) {
+                shortCount++
+            }
+        }
+        return Math.min(1.0, shortCount / durationTypes.length)
     }
 
     function maxSpan(chords) {
@@ -188,12 +223,18 @@ ExtensionBlank {
 
             var url = "http://127.0.0.1:8000"
 
-            // 第一步：/api/analyze 提取特征
+            // 第一步：/api/analyze 提取特征（装饰音/节奏复杂度为插件端实测值）
             var analysis = null
+            var rhythm = root.computeRhythmComplexity(collected.durationTypes)
             var x1 = new XMLHttpRequest()
             x1.open("POST", url + "/api/analyze", false)
             x1.setRequestHeader("Content-Type", "application/json")
-            x1.send(JSON.stringify({ "notes": collected.notes, "measures": 1 }))
+            x1.send(JSON.stringify({
+                "notes": collected.notes,
+                "measures": 1,
+                "ornament_count": collected.ornaments,
+                "rhythm_complexity": rhythm
+            }))
             if (x1.status === 200) {
                 analysis = JSON.parse(x1.responseText)
             } else {

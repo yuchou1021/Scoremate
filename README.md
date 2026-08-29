@@ -15,7 +15,7 @@
 | 功能 | 说明 | 状态 |
 |---|---|---|
 | 🔍 谱面分析 | 调性检测（Krumhansl-Schmuckler）、音域、难度评分 | ✅ 已实测 |
-| 📋 简化建议 | 密度过高 → 降密度；和弦过宽 → 拆和弦；音域过宽 → 压缩 | ✅ 已实测 |
+| 📋 简化建议 | 装饰音多 → 删装饰音；和弦过宽 → 拆和弦；密度高 → 降密度；音域宽 → 压缩；节奏复杂 → 简化节奏 | ✅ 已实测（5 条规则端到端可触发） |
 | 🔁 移调写回 | ±2/±5/±7 半音，直接改谱，Ctrl+Z 可撤销 | ✅ 已实测 |
 | 📐 压缩音域 | 超出 C2-C6 的音按八度平移拉回 | ✅ 已实测 |
 | ✂️ 去重复八度 | 和弦内同音名只保留最低音（`chord.remove`） | ✅ 已实测 |
@@ -82,7 +82,7 @@ python server/tests/smoke_core.py
 # API + WebSocket（需 venv）
 server/.venv/Scripts/python server/tests/smoke_ws.py
 
-# 端到端：6 份测试谱模拟插件请求（需 venv）
+# 端到端：8 份测试谱模拟插件请求（需 venv）
 server/.venv/Scripts/python test-scores/verify_pipeline.py
 ```
 

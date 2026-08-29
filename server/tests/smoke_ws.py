@@ -55,6 +55,66 @@ def main() -> int:
         data = ws.receive_json()
         check("ws.error.unknown_type", data["type"] == "error", f"got={data}")
 
+    # 3.1) 意图判定：含 "keyboard" 的英文指令不应误触发转调（词边界匹配）
+    r = client.post("/api/arrange", json={
+        "summary": {"title": "t", "key_estimate": "C major", "measures": 16,
+                    "difficulty_features": {"note_density": 0.2}},
+        "instruction": "keyboard accompaniment please",
+    })
+    j = r.json()
+    types = [i["type"] for i in j["instructions"]]
+    check("intent.keyboard_no_transpose", "transpose" not in types, f"got={types}")
+
+    # 3.2) 意图判定：真正的 "transpose" 单词 + 目标调 → 触发转调
+    r = client.post("/api/arrange", json={
+        "summary": {"title": "t", "key_estimate": "C major", "measures": 16},
+        "instruction": "transpose please",
+        "target_key": "G major",
+    })
+    j = r.json()
+    types = [i["type"] for i in j["instructions"]]
+    check("intent.transpose_word", types == ["transpose"], f"got={types}")
+
+    # 3.3) 意图判定：中文 "转G调" 触发转调
+    r = client.post("/api/arrange", json={
+        "summary": {"title": "t", "key_estimate": "C major", "measures": 16},
+        "instruction": "转G调",
+        "target_key": "G major",
+    })
+    j = r.json()
+    types = [i["type"] for i in j["instructions"]]
+    check("intent.zh_transpose", types == ["transpose"], f"got={types}")
+
+    # 3.6) 意图判定：提到转调但未给目标调 → 不产出指令，仅提示（行为不变）
+    r = client.post("/api/arrange", json={
+        "summary": {"title": "t", "key_estimate": "C major", "measures": 16},
+        "instruction": "transpose to G",
+    })
+    j = r.json()
+    check("intent.transpose_no_target",
+          j["instructions"] == [] and any("目标调" in w for w in j["warnings"]),
+          f"got instructions={j['instructions']} warnings={j['warnings']}")
+
+    # 3.4) 意图判定："简化" 触发简化规则
+    r = client.post("/api/arrange", json={
+        "summary": {"title": "t", "key_estimate": "C major", "measures": 16,
+                    "difficulty_features": {"range_span": 60}},
+        "instruction": "简化",
+    })
+    j = r.json()
+    types = {i["type"] for i in j["instructions"]}
+    check("intent.zh_simplify", "simplify" in types, f"got={types}")
+
+    # 3.5) 意图判定："simplify" 英文单词触发简化（词边界）
+    r = client.post("/api/arrange", json={
+        "summary": {"title": "t", "key_estimate": "C major", "measures": 16,
+                    "difficulty_features": {"range_span": 60}},
+        "instruction": "simplify it",
+    })
+    j = r.json()
+    types = {i["type"] for i in j["instructions"]}
+    check("intent.en_simplify", "simplify" in types, f"got={types}")
+
     # 4) HTTP 通道仍正常（回归）
     r = client.get("/api/health")
     check("http.health", r.status_code == 200 and r.json()["status"] == "ok", f"got={r.status_code}")

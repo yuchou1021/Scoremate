@@ -20,7 +20,7 @@
 - 结构：
   - `server/` —— FastAPI 云端（分析 + 改编指令生成），`start-server.bat` 一键启动（端口 8000）
   - `plugin/ScoreMate/` —— MuseScore 4.7 插件（manifest.json + Main.qml）
-  - `test-scores/` —— 6 份测试谱 + 生成器 + 端到端验证脚本
+  - `test-scores/` —— 8 份测试谱 + 生成器 + 端到端验证脚本
   - `docs/` —— PRD、装机指引、本交接文档
 
 ### 运行方式
@@ -40,7 +40,7 @@ cd server
 ```powershell
 python server/tests/smoke_core.py                                  # 核心逻辑（系统 python）
 server/.venv/Scripts/python server/tests/smoke_ws.py               # API+WS（venv）
-server/.venv/Scripts/python test-scores/verify_pipeline.py         # 端到端 6 谱（venv）
+server/.venv/Scripts/python test-scores/verify_pipeline.py         # 端到端 8 谱（venv）
 ```
 
 GitHub Actions CI 已配置（push 自动跑以上测试）。
@@ -49,10 +49,10 @@ GitHub Actions CI 已配置（push 自动跑以上测试）。
 
 | 模块 | 内容 |
 |---|---|
-| 服务端 | `/api/health` `/api/analyze`（调性 KS 算法/音域/难度）`/api/arrange`（转调+简化规则）`/api/config` + `/ws` WebSocket |
+| 服务端 | `/api/health` `/api/analyze`（调性 KS 算法/音域/难度；支持插件端传入装饰音数/节奏复杂度实测值）`/api/arrange`（转调+简化规则）`/api/config` + `/ws` WebSocket |
 | 插件分析 | 两段式：analyze 提取特征 → arrange 生成指令（调性/难度/简化建议） |
 | 插件写回 | 移调 ±2/5/7、压缩音域（C2-C6 八度平移）、去重复八度（chord.remove），均 Ctrl+Z 可撤销 |
-| 测试 | 核心 7 项 + API 5 项 + WS 4 项 + 端到端 6 谱，全过 |
+| 测试 | 核心 13 项 + API 5 项 + WS 11 项 + 端到端 8 谱（含 5 条简化规则全覆盖断言），全过 |
 | 开源 | MIT、CI、README、发布 zip（release/） |
 
 ## 3. 架构

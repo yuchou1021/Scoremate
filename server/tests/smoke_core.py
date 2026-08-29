@@ -41,6 +41,26 @@ def main() -> int:
     ins, ws = transpose_plan(s, target_key="C major")
     check("transpose.same_key.noop", len(ins) == 0 and ws, f"ins={len(ins)} warn={ws}")
 
+    # 3.1) 转调：显式负半音（降调）→ 保留方向，不被 %12 翻成正数
+    ins, ws = transpose_plan(s, semitones=-7)
+    check("transpose.negative.direction",
+          len(ins) == 1 and ins[0].params.get("semitones") == -7,
+          f"got={[(i.id, i.params.get('semitones')) for i in ins]} warn={ws}")
+
+    # 3.2) 转调：降调描述文案正确（"降 7 个半音"而非 "移调 -7 个半音"）
+    ins, ws = transpose_plan(s, semitones=-7)
+    check("transpose.negative.desc",
+          len(ins) == 1 and "降" in ins[0].description and "-7" not in ins[0].description,
+          f"got={ins[0].description if ins else 'no ins'}")
+
+    # 3.3) 转调：超出一个八度的值按等价方向折叠（13 → +1、-13 → -1）
+    ins, ws = transpose_plan(s, semitones=13)
+    check("transpose.octave_fold.pos",
+          len(ins) == 1 and ins[0].params.get("semitones") == 1, f"got={ins[0].params if ins else 'no ins'}")
+    ins, ws = transpose_plan(s, semitones=-13)
+    check("transpose.octave_fold.neg",
+          len(ins) == 1 and ins[0].params.get("semitones") == -1, f"got={ins[0].params if ins else 'no ins'}")
+
     # 4) 简化：高难度特征 → 触发全部 5 条规则
     s2 = ScoreSummary(
         title="t", key_estimate="C major", measures=16,
@@ -53,6 +73,17 @@ def main() -> int:
     rules_hit = {i.params["rules"][0] for i in ins2}
     expected = {"drop_ornaments", "split_chords", "reduce_density", "compress_range", "simplify_rhythm"}
     check("simplify.all_rules", rules_hit == expected, f"got={rules_hit} warn={ws2}")
+
+    # 4.1) analyze 传入插件端实测特征 → features 中生效（装饰音/节奏不再恒为 0）
+    r = analyze([60, 62, 64, 65], 1, ornament_count=8, rhythm_complexity=0.8)
+    check("analyze.extra_features",
+          r.features.ornament_count == 8 and abs(r.features.rhythm_complexity - 0.8) < 1e-9,
+          f"got={r.features.ornament_count}/{r.features.rhythm_complexity}")
+
+    # 4.2) analyze 默认缺省 → 装饰音/节奏为 0（向后兼容）
+    r = analyze([60, 62, 64, 65], 1)
+    check("analyze.extra_defaults", r.features.ornament_count == 0 and r.features.rhythm_complexity == 0,
+          f"got={r.features.ornament_count}/{r.features.rhythm_complexity}")
 
     # 5) 简化：简单特征 → 无操作提示
     s3 = ScoreSummary(title="t", measures=8, difficulty_features={"note_density": 0.2})
