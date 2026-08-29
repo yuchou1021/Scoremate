@@ -1,16 +1,16 @@
 /*
- * 谱伴 ScoreMate —— MuseScore 4.7 新扩展（form）v0.4.7
+ * 谱伴 ScoreMate —— MuseScore 4.7 新扩展（form）v0.4.8
  *
  * 里程碑 2 功能：
  *   1. 分析升级：两段式（/api/analyze 提取特征 → /api/arrange 生成指令）
  *   2. 移调写回：预设按钮直接改选中音符（Ctrl+Z 可撤销）
  *
- * v0.4.6 UI 修复：内容自适应 + 可滚动（按钮行 Flow 换行、Flickable 滚动），
- *   解决窗口尺寸变化时按钮溢出/内容被裁切的问题。
- * v0.4.7 写回增强：
- *   - 「执行以上建议」：把分析生成的指令映射到写回操作（移调/压缩音域/
- *     去重复八度），未支持的规则明确提示 v0.2
- *   - 压缩音域改为「整句移动」：整段上移/下移保持旋律轮廓，不再逐音折叠
+ * v0.4.6 UI 修复：内容自适应 + 可滚动（按钮行 Flow 换行、Flickable 滚动）。
+ * v0.4.7 写回增强：执行建议按钮 + 压缩音域整句移动。
+ * v0.4.8 写回补全：
+ *   - 新增拆和弦（转位压缩）与删装饰音写回 → 5 条简化规则全部可落地
+ *   - 移调优先用 MuseScore 内建 transpose（自动修正 tpc 音名拼写），
+ *     内建不可用时回退手动 pitch 修改
  *
  * 网络：同步 XMLHttpRequest → HTTP（4.7 实测可用；同步不依赖异步回调）
  * 乐谱：api.engraving.curScore（新 API），写操作包在 startCmd/endCmd 里
@@ -88,6 +88,8 @@ ExtensionBlank {
                 spacing: 6
                 FlatButton { text: "压缩音域（拉回 C2-C6）"; onClicked: root.compressRange() }
                 FlatButton { text: "去重复八度"; onClicked: root.reduceDensity() }
+                FlatButton { text: "拆和弦（转位）"; onClicked: root.splitChords() }
+                FlatButton { text: "删装饰音"; onClicked: root.dropOrnaments() }
             }
 
             Text {
@@ -111,11 +113,12 @@ ExtensionBlank {
         return null
     }
 
-    // 收集选区：音符元素引用、音高列表、和弦跨度、和弦元素、时值类型、装饰音数
+    // 收集选区：音符元素引用、音高列表、和弦跨度、和弦元素、时值类型、装饰音
     function collectElements() {
         var score = currentScore()
         if (!score) {
-            return { elements: [], notes: [], chords: [], chordElements: [], durationTypes: [], ornaments: 0 }
+            return { elements: [], notes: [], chords: [], chordElements: [], durationTypes: [],
+                     ornaments: 0, ornamentElements: [] }
         }
         var elements = []
         var notes = []
@@ -123,6 +126,7 @@ ExtensionBlank {
         var chordElements = []
         var durationTypes = []
         var ornaments = 0
+        var ornamentElements = []
         var fullScore = !score.selection.elements.length
         if (fullScore) {
             try { cmd("select-all") } catch (e) {}
@@ -142,11 +146,12 @@ ExtensionBlank {
                 } catch (e) {}
                 // 装饰音标记（倚音/波音/颤音，防御式读取）
                 try {
-                    if (el.grace === true || el.isGrace === true ||
-                        (el.graceIndex !== undefined && el.graceIndex !== null)) {
+                    var isOrnament = (el.grace === true || el.isGrace === true ||
+                        (el.graceIndex !== undefined && el.graceIndex !== null) ||
+                        (el.type !== undefined && String(el.type).indexOf("grace") >= 0))
+                    if (isOrnament) {
                         ornaments++
-                    } else if (el.type !== undefined && String(el.type).indexOf("grace") >= 0) {
-                        ornaments++
+                        ornamentElements.push(el)
                     }
                 } catch (e) {}
             }
@@ -166,7 +171,7 @@ ExtensionBlank {
             try { cmd("escape") } catch (e) {}
         }
         return { elements: elements, notes: notes, chords: chords, chordElements: chordElements,
-                 durationTypes: durationTypes, ornaments: ornaments }
+                 durationTypes: durationTypes, ornaments: ornaments, ornamentElements: ornamentElements }
     }
 
     // 节奏复杂度 0-1：短时值（32分/64分）音符占比越高越复杂
@@ -242,8 +247,8 @@ ExtensionBlank {
             lines.push("  ⚠ " + warns[j])
         }
         lines.push("")
-        lines.push("提示：点「执行以上建议」可应用已支持的指令（移调/压缩音域/去重复八度）；")
-        lines.push("删装饰音/拆和弦/简化节奏的写回将在 v0.2 支持。")
+        lines.push("提示：点「执行以上建议」可应用指令（移调/压缩音域/去重复八度/拆和弦/删装饰音）；")
+        lines.push("简化节奏的写回将在 v0.2 支持。")
         return lines.join("\n")
     }
 
@@ -301,8 +306,8 @@ ExtensionBlank {
     }
 
     // 执行最近一次分析生成的改编指令（写回乐谱，可撤销）。
-    // 已支持：转调 / 压缩音域 / 去重复八度；其余规则（删装饰音/拆和弦/
-    // 简化节奏）写回在 v0.2 接入，这里明确提示而不是静默跳过。
+    // 已支持：转调 / 压缩音域 / 去重复八度 / 拆和弦 / 删装饰音；
+    // 简化节奏的写回在 v0.2 接入，这里明确提示而不是静默跳过。
     function applySuggestions() {
         try {
             var ins = root.lastInstructions
@@ -324,7 +329,7 @@ ExtensionBlank {
                 var it = ins[i]
                 var rules = (it.params && it.params.rules) || []
                 if (it.type === "transpose" && it.params && it.params.semitones !== undefined) {
-                    // 转调：直接改选中音符 pitch
+                    // 转调：内建 transpose 优先（自动修正音名拼写）
                     root.applyTranspose(it.params.semitones)
                     lines.push("✓ [" + it.id + "] " + it.description)
                     executed++
@@ -336,6 +341,16 @@ ExtensionBlank {
                 } else if (rules.indexOf("reduce_density") >= 0) {
                     // 去重复八度（降密度）
                     root.reduceDensity()
+                    lines.push("✓ [" + it.id + "] " + it.description)
+                    executed++
+                } else if (rules.indexOf("split_chords") >= 0) {
+                    // 拆和弦（转位压缩）
+                    root.splitChords()
+                    lines.push("✓ [" + it.id + "] " + it.description)
+                    executed++
+                } else if (rules.indexOf("drop_ornaments") >= 0) {
+                    // 删装饰音
+                    root.dropOrnaments()
                     lines.push("✓ [" + it.id + "] " + it.description)
                     executed++
                 } else {
@@ -359,17 +374,42 @@ ExtensionBlank {
         }
     }
 
-    // 移调写回：直接改选中音符的 pitch（可撤销）
+    // 移调写回：优先用 MuseScore 内建 transpose（自动修正 tpc 音名拼写），
+    // 内建不可用时回退到手写 pitch 修改（v0.4.8 新增 tpc 修正路径）
     function applyTranspose(n) {
         try {
+            var score = currentScore()
+            if (!score) {
+                report.text = "没有找到乐谱。"
+                return
+            }
+            // 路径 A：内建 transpose（作用于当前选区，自动处理音名拼写）
+            if (typeof score.transpose === "function") {
+                try {
+                    var direction = n >= 0 ? 0 : 1
+                    var absN = Math.abs(n)
+                    // 半音 → 音级数映射（用于调内音名拼写），跨八度按 7 音级/12 半音折算
+                    var semitoneToDiatonic = [0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6]
+                    var diatonic = semitoneToDiatonic[absN % 12] + Math.floor(absN / 12) * 7
+                    if (score.startCmd) { score.startCmd() }
+                    score.transpose(0, direction, 0, diatonic, absN, true, true)
+                    if (score.endCmd) { score.endCmd() }
+                    report.text = "移调完成（内建 transpose，音名拼写已自动修正）：" +
+                                  (n > 0 ? "+" : "") + n + " 半音\n可用 Ctrl+Z 撤销。"
+                    return
+                } catch (e) {
+                    // 内建失败（如选区为空）→ 回退路径 B
+                }
+            }
+
+            // 路径 B：手动改 pitch（音名拼写可能不完美，v0.4.8 起仅作回退）
             var collected = collectElements()
             if (collected.elements.length === 0) {
                 report.text = "没有找到音符。\n请先选中一段音符。"
                 return
             }
-            var score = currentScore()
             var outOfRange = 0
-            if (score && score.startCmd) {
+            if (score.startCmd) {
                 score.startCmd()
             }
             for (var i in collected.elements) {
@@ -380,10 +420,10 @@ ExtensionBlank {
                 }
                 collected.elements[i].pitch = p
             }
-            if (score && score.endCmd) {
+            if (score.endCmd) {
                 score.endCmd()
             }
-            var msg = "移调完成：" + (n > 0 ? "+" : "") + n + " 半音，共处理 " +
+            var msg = "移调完成（手动模式）：" + (n > 0 ? "+" : "") + n + " 半音，共处理 " +
                       collected.elements.length + " 个音符"
             if (outOfRange > 0) {
                 msg += "（跳过 " + outOfRange + " 个越界音符）"
@@ -462,6 +502,130 @@ ExtensionBlank {
         } catch (e) {
             report.text = "压缩音域出错：" + e
         }
+    }
+
+    // 删装饰音写回：删除检测到的装饰音（倚音/波音/颤音），可撤销
+    function dropOrnaments() {
+        try {
+            var collected = collectElements()
+            var score = currentScore()
+            if (!score || collected.elements.length === 0) {
+                report.text = "没有找到音符。\n请先选中一段音符。"
+                return
+            }
+            if (collected.ornamentElements.length === 0) {
+                report.text = "未检测到装饰音（倚音/波音/颤音）。"
+                return
+            }
+            var removed = 0
+            var failed = 0
+            if (score.startCmd) { score.startCmd() }
+            for (var i in collected.ornamentElements) {
+                if (root.tryRemove(score, collected.ornamentElements[i])) {
+                    removed++
+                } else {
+                    failed++
+                }
+            }
+            if (score.endCmd) { score.endCmd() }
+            var msg = "删装饰音完成：移除 " + removed + " 个装饰音"
+            if (failed > 0) { msg += "（" + failed + " 个删除失败）" }
+            msg += "\n可用 Ctrl+Z 撤销。"
+            report.text = msg
+        } catch (e) {
+            report.text = "删装饰音出错：" + e
+        }
+    }
+
+    // 拆和弦写回：跨度 > 10 度的和弦，把最高音降八度（转位），
+    // 直到跨度收敛到 10 度以内；保持和弦音不变，只是排列更紧凑。
+    function splitChords() {
+        try {
+            var collected = collectElements()
+            var score = currentScore()
+            if (!score || collected.elements.length === 0) {
+                report.text = "没有找到音符。\n请先选中一段音符。"
+                return
+            }
+            var changed = 0
+            if (score.startCmd) { score.startCmd() }
+
+            // 按和弦分组：优先 chordElements（元素自身带 .notes），
+            // 否则用 note.parent 分组（4.7 选区内无 Chord 对象）
+            var groups = []
+            if (collected.chordElements.length > 0) {
+                for (var a in collected.chordElements) {
+                    groups.push(collected.chordElements[a].notes)
+                }
+            } else {
+                // 用音符的 parent 引用去重分组
+                var seen = {}
+                for (var b in collected.elements) {
+                    var n = collected.elements[b]
+                    var p = n.parent
+                    if (!p) { continue }
+                    if (seen[p.uniqueID] !== undefined) { continue }
+                    seen[p.uniqueID] = true
+                    if (p.notes !== undefined && p.notes.length >= 2) {
+                        groups.push(p.notes)
+                    }
+                }
+            }
+
+            for (var g in groups) {
+                var chordNotes = groups[g]
+                if (chordNotes.length < 2) { continue }
+                var span = root.chordSpan(chordNotes)
+                if (span <= 10) { continue }
+                // 循环转位最高音，直到跨度 <= 10 或无法再降
+                var guard = 0
+                while (span > 10 && guard < 12) {
+                    guard++
+                    var hiIdx = -1
+                    var hiPitch = -1
+                    for (var c in chordNotes) {
+                        if (chordNotes[c].pitch > hiPitch) {
+                            hiPitch = chordNotes[c].pitch
+                            hiIdx = c
+                        }
+                    }
+                    if (hiIdx < 0) { break }
+                    var candidate = hiPitch - 12
+                    // 转位后不能低于和弦最低音（否则音序错乱）
+                    var loPitch = 127
+                    for (var d in chordNotes) {
+                        if (chordNotes[d].pitch < loPitch) { loPitch = chordNotes[d].pitch }
+                    }
+                    if (candidate < loPitch) { break }
+                    if (chordNotes[hiIdx].pitch !== candidate) {
+                        chordNotes[hiIdx].pitch = candidate
+                        changed++
+                    }
+                    span = root.chordSpan(chordNotes)
+                }
+            }
+            if (score.endCmd) { score.endCmd() }
+
+            if (changed === 0) {
+                report.text = "未发现跨度超过 10 度的和弦，无需拆分。"
+            } else {
+                report.text = "拆和弦完成：转位 " + changed + " 个音符（高音降八度，跨度收敛）\n可用 Ctrl+Z 撤销。"
+            }
+        } catch (e) {
+            report.text = "拆和弦出错：" + e
+        }
+    }
+
+    // 和弦跨度（半音）：max - min
+    function chordSpan(notes) {
+        var lo = 127
+        var hi = 0
+        for (var i in notes) {
+            var p = notes[i].pitch !== undefined ? notes[i].pitch : notes[i]
+            if (p < lo) { lo = p }
+            if (p > hi) { hi = p }
+        }
+        return hi - lo
     }
 
     // 判断音符是否是和弦内同音名的更高八度重复（保留最低音）

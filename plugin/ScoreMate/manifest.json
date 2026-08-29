@@ -3,7 +3,7 @@
     "type": "form",
     "title": "谱伴 ScoreMate",
     "description": "AI 改编助手：分析选区并生成改编指令（转调/简化）",
-    "version": "0.4.7",
+    "version": "0.4.8",
     "apiversion": 2,
     "actions": [
         { "path": "Main.qml" }
