@@ -1,9 +1,12 @@
 /*
- * 谱伴 ScoreMate —— MuseScore 4.7 新扩展（form）v0.4.5
+ * 谱伴 ScoreMate —— MuseScore 4.7 新扩展（form）v0.4.6
  *
  * 里程碑 2 功能：
  *   1. 分析升级：两段式（/api/analyze 提取特征 → /api/arrange 生成指令）
  *   2. 移调写回：预设按钮直接改选中音符（Ctrl+Z 可撤销）
+ *
+ * v0.4.6 UI 修复：内容自适应 + 可滚动（按钮行 Flow 换行、Flickable 滚动），
+ *   解决窗口尺寸变化时按钮溢出/内容被裁切的问题。
  *
  * 网络：同步 XMLHttpRequest → HTTP（4.7 实测可用；同步不依赖异步回调）
  * 乐谱：api.engraving.curScore（新 API），写操作包在 startCmd/endCmd 里
@@ -21,48 +24,63 @@ import MuseApi.Controls
 ExtensionBlank {
     id: root
 
-    implicitHeight: 700
-    implicitWidth: 740
+    // 初始窗口尺寸（MuseScore form 窗口不可自由拉伸，故内容需自适应+可滚动，
+    // 避免按钮行溢出、窗口过小时内容被裁切——见 musescore/MuseScore#26194）
+    implicitHeight: 520
+    implicitWidth: 560
 
-    Column {
+    Flickable {
+        id: scroll
         anchors.fill: parent
-        anchors.margins: 16
-        spacing: 10
+        contentWidth: column.width + 24
+        contentHeight: column.height + 24
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
 
-        StyledTextLabel {
-            text: "谱伴 ScoreMate（4.7 扩展版 v0.4）"
-        }
+        Column {
+            id: column
+            x: 12
+            y: 12
+            width: Math.max(scroll.width - 24, 320)
+            spacing: 10
 
-        StyledTextLabel { text: "① 分析（生成改编建议）：" }
-        FlatButton {
-            text: "分析选区并生成改编指令"
-            onClicked: root.runAnalysis()
-        }
+            StyledTextLabel {
+                text: "谱伴 ScoreMate（4.7 扩展版 v0.4）"
+            }
 
-        StyledTextLabel { text: "② 移调写回（直接改谱，Ctrl+Z 可撤销）：" }
-        Row {
-            spacing: 6
-            FlatButton { text: "-7";  onClicked: root.applyTranspose(-7) }
-            FlatButton { text: "-5";  onClicked: root.applyTranspose(-5) }
-            FlatButton { text: "-2";  onClicked: root.applyTranspose(-2) }
-            FlatButton { text: "+2";  onClicked: root.applyTranspose(2) }
-            FlatButton { text: "+5";  onClicked: root.applyTranspose(5) }
-            FlatButton { text: "+7";  onClicked: root.applyTranspose(7) }
-        }
+            StyledTextLabel { text: "① 分析（生成改编建议）：" }
+            FlatButton {
+                text: "分析选区并生成改编指令"
+                onClicked: root.runAnalysis()
+            }
 
-        StyledTextLabel { text: "③ 简化写回（直接改谱，Ctrl+Z 可撤销）：" }
-        Row {
-            spacing: 6
-            FlatButton { text: "压缩音域（拉回 C2-C6）"; onClicked: root.compressRange() }
-            FlatButton { text: "去重复八度"; onClicked: root.reduceDensity() }
-        }
+            StyledTextLabel { text: "② 移调写回（直接改谱，Ctrl+Z 可撤销）：" }
+            Flow {
+                width: parent.width
+                spacing: 6
+                FlatButton { text: "-7";  onClicked: root.applyTranspose(-7) }
+                FlatButton { text: "-5";  onClicked: root.applyTranspose(-5) }
+                FlatButton { text: "-2";  onClicked: root.applyTranspose(-2) }
+                FlatButton { text: "+2";  onClicked: root.applyTranspose(2) }
+                FlatButton { text: "+5";  onClicked: root.applyTranspose(5) }
+                FlatButton { text: "+7";  onClicked: root.applyTranspose(7) }
+            }
 
-        Text {
-            id: report
-            width: parent.width
-            wrapMode: Text.WordWrap
-            font.pixelSize: 12
-            text: "使用说明：\n1. 在乐谱中选中一段音符\n2. 点「分析」看改编建议；或直接点「移调」按钮改谱"
+            StyledTextLabel { text: "③ 简化写回（直接改谱，Ctrl+Z 可撤销）：" }
+            Flow {
+                width: parent.width
+                spacing: 6
+                FlatButton { text: "压缩音域（拉回 C2-C6）"; onClicked: root.compressRange() }
+                FlatButton { text: "去重复八度"; onClicked: root.reduceDensity() }
+            }
+
+            Text {
+                id: report
+                width: parent.width
+                wrapMode: Text.WordWrap
+                font.pixelSize: 12
+                text: "使用说明：\n1. 在乐谱中选中一段音符\n2. 点「分析」看改编建议；或直接点「移调」按钮改谱"
+            }
         }
     }
 
